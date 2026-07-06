@@ -1,15 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, ChevronRight, AlignLeft, Image, X, CheckCircle } from 'lucide-react';
+import {
+  Plus, Trash2, ChevronLeft, ChevronRight, Bold, Italic, Underline,
+  Link2, AlignLeft, List, ListOrdered, Image as ImageIcon, Sigma,
+} from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../App';
+import { QuestionCreationPanel, type PanelQuestion } from '../components/QuestionCreationPanel';
+import { TestSummaryCard } from '../components/TestSummaryCard';
+import { EditTestModal } from '../components/EditTestModal';
+import type { FormState, TestType } from '../types';
 
 interface Option { id: string; text: string; }
 interface Question {
   _id?: string;
   questionText: string;
   options: Option[];
-  correctOption: string;  // "A"|"B"|"C"|"D"
+  correctOption: string;
   solution: string;
   difficultyLevel: string;
   topic: string;
@@ -18,32 +25,32 @@ interface Question {
 
 const EMPTY_Q = (): Question => ({
   questionText: '',
-  options: [
-    { id: 'A', text: '' },
-    { id: 'B', text: '' },
-    { id: 'C', text: '' },
-    { id: 'D', text: '' },
-  ],
+  options: [{ id: 'A', text: '' }, { id: 'B', text: '' }, { id: 'C', text: '' }, { id: 'D', text: '' }],
   correctOption: '',
   solution: '',
-  difficultyLevel: 'Easy',
+  difficultyLevel: '',
   topic: '',
   subTopic: '',
 });
 
-/* ---- Minimal Toolbar ---- */
+const TOOLBAR_GROUPS: { icon: React.ElementType; label: string }[][] = [
+  [{ icon: Italic, label: 'Italic' }, { icon: Bold, label: 'Bold' }, { icon: Underline, label: 'Underline' }, { icon: Link2, label: 'Link' }],
+  [{ icon: AlignLeft, label: 'Align' }, { icon: List, label: 'Bullet list' }, { icon: ListOrdered, label: 'Numbered list' }],
+  [{ icon: ImageIcon, label: 'Insert image' }, { icon: Sigma, label: 'Formula' }],
+];
+
 const EditorToolbar: React.FC = () => (
-  <div className="q-editor-toolbar">
-    {['B', 'I', 'U'].map(b => (
-      <button key={b} type="button" className="toolbar-btn" title={b === 'B' ? 'Bold' : b === 'I' ? 'Italic' : 'Underline'}
-        style={b === 'I' ? { fontStyle: 'italic' } : b === 'U' ? { textDecoration: 'underline' } : {}}>
-        {b}
-      </button>
+  <div className="rte-toolbar">
+    {TOOLBAR_GROUPS.map((group, gi) => (
+      <React.Fragment key={gi}>
+        {gi > 0 && <span className="rte-sep" />}
+        {group.map(({ icon: Icon, label }) => (
+          <button key={label} type="button" className="rte-btn" title={label} aria-label={label}>
+            <Icon size={14} />
+          </button>
+        ))}
+      </React.Fragment>
     ))}
-    <div className="toolbar-sep" />
-    <button type="button" className="toolbar-btn" title="Align"><AlignLeft size={12} /></button>
-    <div className="toolbar-sep" />
-    <button type="button" className="toolbar-btn" title="Image"><Image size={12} /></button>
   </div>
 );
 
@@ -56,26 +63,24 @@ const AddQuestions: React.FC = () => {
   const [questions, setQuestions] = useState<Question[]>([EMPTY_Q()]);
   const [activeIdx, setActiveIdx] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
-  /* ── Load test info + existing questions ── */
+  const loadTest = () => {
+    if (!testId) return;
+    api.getTest(testId).then(r => setTest(r?.data || r)).catch(() => {});
+  };
+
   useEffect(() => {
     if (!testId) return;
-
-    api.getTest(testId)
-      .then(r => setTest(r?.data || r))
-      .catch(() => {});
-
+    loadTest();
     api.getQuestions(testId)
       .then(r => {
-        // api.getQuestions returns normalized questions with options [{id,text}]
         const arr = Array.isArray(r?.data) ? r.data : [];
         if (arr.length > 0) {
           setQuestions(arr.map((q: any) => ({
             _id: q._id || q.id,
             questionText: q.questionText || '',
-            options: q.options?.length >= 4
-              ? q.options
-              : ['A', 'B', 'C', 'D'].map((id, i) => ({ id, text: q.options?.[i]?.text || '' })),
+            options: q.options?.length >= 4 ? q.options : ['A', 'B', 'C', 'D'].map((id, i) => ({ id, text: q.options?.[i]?.text || '' })),
             correctOption: q.correctOption || '',
             solution: q.solution || '',
             difficultyLevel: q.difficultyLevel || 'Easy',
@@ -88,300 +93,228 @@ const AddQuestions: React.FC = () => {
   }, [testId]);
 
   const current = questions[activeIdx] || EMPTY_Q();
+  const targetCount = test?.totalQuestions || questions.length;
 
-  const updateCurrent = (updates: Partial<Question>) => {
-    setQuestions(qs => qs.map((q, i) => i === activeIdx ? { ...q, ...updates } : q));
-  };
+  const updateCurrent = (updates: Partial<Question>) =>
+    setQuestions(qs => qs.map((q, i) => (i === activeIdx ? { ...q, ...updates } : q)));
 
-  const updateOption = (optId: string, text: string) => {
-    const opts = current.options.map(o => o.id === optId ? { ...o, text } : o);
-    updateCurrent({ options: opts });
-  };
+  const updateOption = (optId: string, text: string) =>
+    updateCurrent({ options: current.options.map(o => (o.id === optId ? { ...o, text } : o)) });
 
   const addNewQuestion = () => {
     setQuestions(qs => [...qs, EMPTY_Q()]);
     setActiveIdx(questions.length);
   };
 
-  const removeQuestion = (idx: number) => {
-    if (questions.length === 1) return;
-    const updated = questions.filter((_, i) => i !== idx);
-    setQuestions(updated);
-    setActiveIdx(Math.min(idx, updated.length - 1));
-  };
+  const clearCurrent = () => updateCurrent(EMPTY_Q());
 
-  const validateAll = () => {
-    for (let i = 0; i < questions.length; i++) {
-      const q = questions[i];
-      if (!q.questionText.trim()) {
-        toast.showError(`Question ${i + 1}: text is required`);
-        setActiveIdx(i);
-        return false;
-      }
-      const filled = q.options.filter(o => o.text.trim());
-      if (filled.length < 2) {
-        toast.showError(`Question ${i + 1}: at least 2 options required`);
-        setActiveIdx(i);
-        return false;
-      }
-      if (!q.correctOption) {
-        toast.showError(`Question ${i + 1}: select the correct answer`);
-        setActiveIdx(i);
-        return false;
-      }
-    }
-    return true;
-  };
+  const isDone = (q: Question) => Boolean(q.questionText.trim() && q.correctOption);
 
-  const handleSave = async () => {
-    // Only validate non-empty questions
+  const persist = async (): Promise<boolean> => {
     const toSave = questions.filter(q => q.questionText.trim());
-    if (toSave.length === 0) {
-      toast.showError('Add at least one question');
-      return;
-    }
-    for (let i = 0; i < toSave.length; i++) {
-      const q = toSave[i];
-      if (!q.correctOption) {
-        toast.showError(`Question ${i + 1}: select the correct answer`);
-        return;
-      }
-    }
-
+    if (toSave.length === 0) { toast.showError('Add at least one question'); return false; }
+    const missing = toSave.findIndex(q => !q.correctOption);
+    if (missing !== -1) { toast.showError(`Question ${missing + 1}: select the correct answer`); return false; }
     setSaving(true);
     try {
-      // Save all valid questions in one bulk call
       await api.saveQuestionsBulk(testId!, toSave);
-      toast.showSuccess(`${toSave.length} question(s) saved!`);
-      navigate(`/preview-test/${testId}`);
+      return true;
     } catch (err: any) {
       toast.showError(err?.message || 'Failed to save questions');
+      return false;
     } finally {
       setSaving(false);
     }
   };
 
-  const completedCount = questions.filter(q => q.questionText.trim() && q.correctOption).length;
-  const targetCount    = test?.totalQuestions || 0;
+  const handleContinue = async () => {
+    if (await persist()) navigate(`/preview-test/${testId}`);
+  };
+
+  /* Option lists for the per-question settings dropdowns */
+  const uniq = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)));
+  const topicOptions = uniq([...(test?.topics ?? []), current.topic]);
+  const subTopicOptions = uniq([...(test?.sub_topics ?? []), current.subTopic]);
+
+  const panelQuestions: PanelQuestion[] = questions.map((q, i) => ({
+    label: `Question ${i + 1}`,
+    done: isDone(q),
+  }));
+
+  const editInitial: Partial<FormState> | undefined = test ? {
+    testName: test.testName,
+    subject: test.subject, subject_id: test.subject_id,
+    topic: test.topic, topic_id: test.topic_ids?.[0] || '',
+    subTopic_id: test.sub_topic_ids?.[0] || '',
+    duration: test.duration,
+    difficultyLevel: test.difficultyLevel,
+    negativeMarking: test.negativeMarking,
+    unattempted: test.unattempted,
+    correctMarking: test.correctMarking,
+    totalQuestions: test.totalQuestions,
+    testType: (['chapterwise', 'pyq', 'mocktest'].includes(test.testType) ? test.testType : 'chapterwise') as TestType,
+  } : undefined;
 
   return (
-    <div className="page-container">
-      {/* Breadcrumb */}
-      <div className="breadcrumb" style={{ paddingLeft: 0, marginBottom: 8 }}>
-        <span className="breadcrumb-item" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>Dashboard</span>
-        <span className="breadcrumb-sep">›</span>
-        <span className="breadcrumb-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`/edit-test/${testId}`)}>Test Details</span>
-        <span className="breadcrumb-sep">›</span>
-        <span className="breadcrumb-item active">Add Questions</span>
-      </div>
+    <div className="creation-layout">
+      <QuestionCreationPanel
+        total={targetCount}
+        questions={panelQuestions}
+        activeIdx={activeIdx}
+        onSelect={setActiveIdx}
+      />
 
-      <div className="page-header" style={{ marginBottom: 16 }}>
-        <div>
-          <h1 className="page-title">Add Questions</h1>
-          {test && (
-            <p style={{ fontSize: 13, color: '#6B7280', marginTop: 2 }}>
-              <strong style={{ color: '#1A1D23' }}>{test.testName}</strong>
-              {test.subject && <span> · {test.subject}</span>}
-              {targetCount > 0 && <span> · Target: {targetCount} Qs</span>}
-            </p>
-          )}
+      <div className="creation-main">
+        {/* Top row */}
+        <div className="creation-topbar">
+          <nav className="breadcrumb">
+            <span className="breadcrumb-item">Test Creation</span>
+            <span className="breadcrumb-sep">/</span>
+            <span className="breadcrumb-item">Create Test</span>
+            <span className="breadcrumb-sep">/</span>
+            <span className="breadcrumb-item active">Chapter Wise</span>
+          </nav>
+          <button className="btn btn-primary" onClick={handleContinue} disabled={saving}>
+            {saving ? 'Saving…' : 'Publish'}
+          </button>
         </div>
-      </div>
 
-      {/* Wizard Steps */}
-      <div className="steps-header" style={{ marginBottom: 16 }}>
-        <div className="step-item completed">
-          <div className="step-circle"><CheckCircle size={14} /></div>
-          <span className="step-label">Test Details</span>
-        </div>
-        <div className="step-connector done" />
-        <div className="step-item active">
-          <div className="step-circle">2</div>
-          <span className="step-label">Add Questions</span>
-        </div>
-        <div className="step-connector" />
-        <div className="step-item">
-          <div className="step-circle">3</div>
-          <span className="step-label">Preview &amp; Publish</span>
-        </div>
-      </div>
+        <TestSummaryCard test={test || {}} onEdit={() => setEditOpen(true)} />
 
-      {/* Split Layout */}
-      <div className="q-editor-layout">
-
-        {/* ── LEFT: Question Sidebar ── */}
-        <div className="q-sidebar">
-          <div className="q-sidebar-header">
-            <span>Questions ({questions.length})</span>
-            <button className="btn btn-primary btn-sm" onClick={addNewQuestion} type="button">
-              <Plus size={12} /> Add
-            </button>
+        {/* Question editor */}
+        <div className="q-block">
+          <div className="q-block-head">
+            <span className="q-block-title">Question {activeIdx + 1}<span className="q-block-total">/{targetCount}</span></span>
+            <div className="q-block-actions">
+              <button className="btn btn-outline btn-sm" onClick={addNewQuestion}><Plus size={14} /> MCQ</button>
+              <button className="btn btn-outline btn-sm" type="button"><ImageIcon size={13} /> CSV</button>
+            </div>
           </div>
 
-          <div className="q-list">
-            {questions.map((q, i) => (
-              <div
-                key={i}
-                className={`q-list-item${activeIdx === i ? ' active' : ''}`}
-                onClick={() => setActiveIdx(i)}
-              >
-                <div className="q-list-item-num">{i + 1}</div>
-                <div style={{ flex: 1, overflow: 'hidden' }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {q.questionText.trim() ? q.questionText.slice(0, 38) + (q.questionText.length > 38 ? '…' : '') : `Question ${i + 1}`}
-                  </div>
-                  <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 1 }}>
-                    {q.correctOption ? `✓ Ans: ${q.correctOption}` : 'No answer set'}
-                  </div>
-                </div>
-                {questions.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={e => { e.stopPropagation(); removeQuestion(i); }}
-                    style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: 2, borderRadius: 3, flexShrink: 0 }}
-                  >
-                    <X size={12} />
-                  </button>
-                )}
+          <button className="link-danger" onClick={clearCurrent} type="button">
+            <Trash2 size={13} /> Delete All Edits
+          </button>
+
+          {/* Question text */}
+          <div className="rte">
+            <EditorToolbar />
+            <textarea
+              className="rte-area"
+              placeholder="Type here"
+              value={current.questionText}
+              onChange={e => updateCurrent({ questionText: e.target.value })}
+              rows={4}
+            />
+          </div>
+
+          {/* Options */}
+          <div className="q-options">
+            <div className="q-section-label">Type the options below</div>
+            {current.options.map(opt => (
+              <div key={opt.id} className="q-option-row">
+                <button
+                  type="button"
+                  className={`opt-radio${current.correctOption === opt.id ? ' selected' : ''}`}
+                  onClick={() => updateCurrent({ correctOption: opt.id })}
+                  aria-label={`Mark option ${opt.id} correct`}
+                />
+                <input
+                  className="form-input"
+                  placeholder="Type Option here"
+                  value={opt.text}
+                  onChange={e => updateOption(opt.id, e.target.value)}
+                />
+                <button type="button" className="icon-btn" onClick={() => updateOption(opt.id, '')} aria-label="Clear option">
+                  <Trash2 size={15} />
+                </button>
               </div>
             ))}
           </div>
 
-          {/* Progress bar */}
-          {targetCount > 0 && (
-            <div style={{ padding: '12px 16px', borderTop: '1px solid #E2E5EF', fontSize: 12, color: '#9CA3AF' }}>
-              <div style={{ marginBottom: 4 }}>{completedCount} / {targetCount} complete</div>
-              <div style={{ height: 3, background: '#E2E5EF', borderRadius: 99 }}>
-                <div style={{
-                  height: '100%',
-                  background: '#4F6EF7',
-                  borderRadius: 99,
-                  width: `${Math.min(100, (completedCount / targetCount) * 100)}%`,
-                  transition: 'width 0.3s ease',
-                }} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── RIGHT: Editor ── */}
-        <div className="q-editor-panel">
-          <div className="q-editor-header">
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Question {activeIdx + 1}</span>
-            <button className="btn btn-secondary btn-sm" type="button" onClick={() => navigate(`/edit-test/${testId}`)}>
-              ← Edit Test Details
-            </button>
-          </div>
-
-          <div className="q-editor-body">
-
-            {/* Question Text */}
-            <div style={{ marginBottom: 16 }}>
-              <div className="options-label" style={{ marginBottom: 8 }}>
-                Question Text <span style={{ color: '#EF4444' }}>*</span>
-              </div>
-              <div className="q-text-editor">
-                <EditorToolbar />
-                <textarea
-                  className="q-textarea"
-                  placeholder="Type your question here..."
-                  value={current.questionText}
-                  onChange={e => updateCurrent({ questionText: e.target.value })}
-                  rows={3}
-                />
-              </div>
-            </div>
-
-            {/* Options */}
-            <div className="options-section">
-              <div className="options-label">
-                Answer Options <span style={{ color: '#EF4444' }}>*</span>
-              </div>
-              <p style={{ fontSize: 12, color: '#9CA3AF', marginBottom: 10 }}>
-                Click the radio button to mark the correct answer
-              </p>
-              {current.options.map(opt => (
-                <div key={opt.id} className="option-row">
-                  {/* correct-answer radio */}
-                  <div
-                    className={`option-radio${current.correctOption === opt.id ? ' selected' : ''}`}
-                    onClick={() => updateCurrent({ correctOption: opt.id })}
-                    title="Mark as correct"
-                  />
-                  <span style={{ width: 20, fontSize: 13, fontWeight: 600, color: '#6B7280', flexShrink: 0 }}>
-                    {opt.id}.
-                  </span>
-                  <input
-                    type="text"
-                    className={`option-input${current.correctOption === opt.id ? ' correct' : ''}`}
-                    placeholder={`Option ${opt.id}`}
-                    value={opt.text}
-                    onChange={e => updateOption(opt.id, e.target.value)}
-                  />
-                  <button type="button" className="option-clear" onClick={() => updateOption(opt.id, '')} title="Clear">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            {/* Solution */}
-            <div className="solution-section">
-              <div className="solution-label">Solution / Explanation</div>
+          {/* Solution */}
+          <div className="q-solution">
+            <div className="q-section-label">Add Solution</div>
+            <div className="q-solution-row">
               <textarea
-                className="solution-input"
-                placeholder="Enter solution or explanation (optional)..."
+                className="form-input"
+                placeholder="Type here"
                 value={current.solution}
                 onChange={e => updateCurrent({ solution: e.target.value })}
-                rows={3}
+                rows={4}
               />
+              <button type="button" className="icon-btn" onClick={() => updateCurrent({ solution: '' })} aria-label="Clear solution">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+
+          {/* Pager */}
+          <div className="q-pager">
+            <button
+              type="button"
+              className="pager-btn"
+              onClick={() => setActiveIdx(i => Math.max(0, i - 1))}
+              disabled={activeIdx === 0}
+              aria-label="Previous question"
+            ><ChevronLeft size={16} /></button>
+            <button
+              type="button"
+              className="pager-btn"
+              onClick={() => setActiveIdx(i => Math.min(questions.length - 1, i + 1))}
+              disabled={activeIdx >= questions.length - 1}
+              aria-label="Next question"
+            ><ChevronRight size={16} /></button>
+          </div>
+
+          {/* Settings */}
+          <div className="q-settings">
+            <div className="q-settings-title">Question settings</div>
+
+            <div className="form-group">
+              <label className="form-label">Level of Difficulty</label>
+              <select className="form-select" value={current.difficultyLevel} onChange={e => updateCurrent({ difficultyLevel: e.target.value })}>
+                <option value="">Select from Drop-down</option>
+                <option>Easy</option>
+                <option>Medium</option>
+                <option>Difficult</option>
+              </select>
             </div>
 
-            {/* Settings */}
-            <div className="q-settings">
-              <div className="q-settings-title">Question Settings</div>
-              <div className="grid-3" style={{ gap: 12 }}>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 12 }}>Difficulty</label>
-                  <select className="form-select" value={current.difficultyLevel}
-                    onChange={e => updateCurrent({ difficultyLevel: e.target.value })}>
-                    <option>Easy</option>
-                    <option>Medium</option>
-                    <option>Difficult</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 12 }}>Topic</label>
-                  <input className="form-input" placeholder="Topic" value={current.topic}
-                    onChange={e => updateCurrent({ topic: e.target.value })} />
-                </div>
-                <div className="form-group">
-                  <label className="form-label" style={{ fontSize: 12 }}>Sub Topic</label>
-                  <input className="form-input" placeholder="Sub Topic" value={current.subTopic}
-                    onChange={e => updateCurrent({ subTopic: e.target.value })} />
-                </div>
-              </div>
+            <div className="form-group">
+              <label className="form-label">Topic</label>
+              <select className="form-select" value={current.topic} onChange={e => updateCurrent({ topic: e.target.value })}>
+                <option value="">Select from Drop-down</option>
+                {topicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Sub-topic</label>
+              <select className="form-select" value={current.subTopic} onChange={e => updateCurrent({ subTopic: e.target.value })}>
+                <option value="">Select from Drop-down</option>
+                {subTopicOptions.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
             </div>
           </div>
 
           {/* Footer */}
-          <div className="q-editor-footer">
-            <button className="btn btn-secondary" onClick={() => navigate(`/edit-test/${testId}`)} disabled={saving}>
-              ← Back
+          <div className="q-footer">
+            <button className="btn btn-coral" onClick={() => navigate('/')} disabled={saving}>Exit Test Creation</button>
+            <button className="btn btn-primary" onClick={handleContinue} disabled={saving}>
+              {saving ? 'Saving…' : 'Next'}
             </button>
-            <div style={{ display: 'flex', gap: 10 }}>
-              {activeIdx < questions.length - 1 && (
-                <button className="btn btn-secondary" onClick={() => setActiveIdx(i => i + 1)} disabled={saving}>
-                  Next Question →
-                </button>
-              )}
-              <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-                {saving ? 'Saving…' : 'Save & Continue'} <ChevronRight size={14} />
-              </button>
-            </div>
           </div>
         </div>
       </div>
+
+      {editOpen && testId && (
+        <EditTestModal
+          testId={testId}
+          initial={editInitial}
+          onClose={() => setEditOpen(false)}
+          onSaved={loadTest}
+        />
+      )}
     </div>
   );
 };

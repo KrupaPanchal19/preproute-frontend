@@ -1,62 +1,70 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { CheckCircle, Clock, BookOpen, BarChart2, Edit3, Send, Calendar } from 'lucide-react';
+import { CheckCircle, Calendar } from 'lucide-react';
 import { api } from '../api';
 import { useToast } from '../App';
+import { QuestionCreationPanel, type PanelQuestion } from '../components/QuestionCreationPanel';
+import { TestSummaryCard } from '../components/TestSummaryCard';
+import { EditTestModal } from '../components/EditTestModal';
+import type { FormState, TestType } from '../types';
 
-const DURATION_OPTIONS = [
-  { value: '7',       label: '1 week' },
-  { value: '14',      label: '2 weeks' },
-  { value: '30',      label: '1 month' },
-  { value: '90',      label: '3 months' },
-  { value: 'forever', label: 'Always live' },
+const LIVE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'always', label: 'Always Available' },
+  { value: '3w',     label: '3 Weeks' },
+  { value: '1w',     label: '1 Week' },
+  { value: '1m',     label: '1 Month' },
+  { value: '2w',     label: '2 Weeks' },
+  { value: 'custom', label: 'Custom Duration' },
 ];
 
-const LETTERS = ['A', 'B', 'C', 'D'];
+const END_TIMES = ['09:00', '12:00', '15:00', '18:00', '21:00', '23:59'];
 
 const PreviewPublish: React.FC = () => {
   const { id: testId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const toast = useToast();
 
-  const [test,       setTest]       = useState<any>(null);
-  const [questions,  setQuestions]  = useState<any[]>([]);
-  const [loading,    setLoading]    = useState(true);
+  const [test, setTest] = useState<any>(null);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
-  const [published,  setPublished]  = useState(false);
-  const [publishMode,  setPublishMode]  = useState<'now' | 'schedule'>('now');
-  const [liveDuration, setLiveDuration] = useState('30');
-  const [scheduleDate, setScheduleDate] = useState('');
+  const [editOpen, setEditOpen] = useState(false);
+
+  const [publishMode, setPublishMode] = useState<'now' | 'schedule'>('now');
+  const [liveUntil, setLiveUntil] = useState('custom');
+  const [endDate, setEndDate] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [scheduleAt, setScheduleAt] = useState('');
+
+  const loadTest = () => {
+    if (!testId) return;
+    api.getTest(testId).then(r => setTest(r?.data || null)).catch(() => {});
+  };
 
   useEffect(() => {
     if (!testId) return;
     setLoading(true);
-
     Promise.all([
       api.getTest(testId).catch(() => null),
       api.getQuestions(testId).catch(() => ({ data: [] })),
     ]).then(([tRes, qRes]) => {
-      // Both are already normalized
       setTest(tRes?.data || null);
-      const qs = Array.isArray(qRes?.data) ? qRes.data : [];
-      setQuestions(qs);
+      setQuestions(Array.isArray(qRes?.data) ? qRes.data : []);
     }).finally(() => setLoading(false));
   }, [testId]);
 
-  const handlePublish = async () => {
+  const handleConfirm = async () => {
     if (!testId) return;
-    if (publishMode === 'schedule' && !scheduleDate) {
-      toast.showError('Please select a schedule date');
-      return;
-    }
+    if (publishMode === 'schedule' && !scheduleAt) { toast.showError('Please select a schedule date'); return; }
+    if (publishMode === 'now' && liveUntil === 'custom' && !endDate) { toast.showError('Please choose an end date'); return; }
     setPublishing(true);
     try {
       await api.publishTest(testId, {
-        ...(publishMode === 'schedule' && scheduleDate ? { scheduledAt: scheduleDate } : {}),
-        live_duration: liveDuration,
+        ...(publishMode === 'schedule' && scheduleAt ? { scheduledAt: scheduleAt } : {}),
+        live_duration: liveUntil === 'custom' ? `${endDate}${endTime ? `T${endTime}` : ''}` : liveUntil,
       });
-      setPublished(true);
       toast.showSuccess('Test published successfully!');
+      navigate('/');
     } catch (err: any) {
       toast.showError(err?.message || 'Failed to publish test');
     } finally {
@@ -64,295 +72,124 @@ const PreviewPublish: React.FC = () => {
     }
   };
 
-  /* ── Loading ── */
+  const totalQ = test?.totalQuestions || questions.length;
+
+  const panelQuestions: PanelQuestion[] = questions.map((_, i) => ({
+    label: `Question ${i + 1}`,
+    done: true,
+  }));
+
+  const editInitial: Partial<FormState> | undefined = test ? {
+    testName: test.testName,
+    subject: test.subject, subject_id: test.subject_id,
+    topic: test.topic, topic_id: test.topic_ids?.[0] || '',
+    subTopic_id: test.sub_topic_ids?.[0] || '',
+    duration: test.duration,
+    difficultyLevel: test.difficultyLevel,
+    negativeMarking: test.negativeMarking,
+    unattempted: test.unattempted,
+    correctMarking: test.correctMarking,
+    totalQuestions: test.totalQuestions,
+    testType: (['chapterwise', 'pyq', 'mocktest'].includes(test.testType) ? test.testType : 'chapterwise') as TestType,
+  } : undefined;
+
   if (loading) {
     return (
-      <div className="page-container">
-        <div className="loading-state"><div className="spinner" /><span>Loading preview…</span></div>
-      </div>
-    );
-  }
-
-  /* ── Success Screen ── */
-  if (published) {
-    return (
-      <div className="page-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '70vh' }}>
-        <div style={{ textAlign: 'center', maxWidth: 420 }}>
-          <div className="success-modal-icon">
-            <CheckCircle size={36} color="#059669" />
-          </div>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#1A1D23', marginBottom: 8 }}>Test Published!</h2>
-          <p style={{ fontSize: 14, color: '#6B7280', marginBottom: 28, lineHeight: 1.7 }}>
-            <strong style={{ color: '#1A1D23' }}>{test?.testName || 'Your test'}</strong> has been published successfully
-            {publishMode === 'schedule' && scheduleDate
-              ? ` and scheduled for ${new Date(scheduleDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
-              : ' and is now live'}.
-          </p>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
-            <button className="btn btn-secondary" onClick={() => navigate('/')}>Back to Dashboard</button>
-            <button className="btn btn-primary" onClick={() => navigate('/create-test')}>Create Another Test</button>
-          </div>
+      <div className="creation-layout">
+        <QuestionCreationPanel total={0} questions={[]} />
+        <div className="creation-main">
+          <div className="loading-state"><div className="spinner" /><span>Loading preview…</span></div>
         </div>
       </div>
     );
   }
 
-  /* ── Main Preview Screen ── */
   return (
-    <div className="page-container">
-      {/* Breadcrumb */}
-      <div className="breadcrumb" style={{ paddingLeft: 0, marginBottom: 8 }}>
-        <span className="breadcrumb-item" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>Dashboard</span>
-        <span className="breadcrumb-sep">›</span>
-        <span className="breadcrumb-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`/edit-test/${testId}`)}>Test Details</span>
-        <span className="breadcrumb-sep">›</span>
-        <span className="breadcrumb-item" style={{ cursor: 'pointer' }} onClick={() => navigate(`/add-questions/${testId}`)}>Questions</span>
-        <span className="breadcrumb-sep">›</span>
-        <span className="breadcrumb-item active">Preview &amp; Publish</span>
-      </div>
+    <div className="creation-layout">
+      <QuestionCreationPanel total={totalQ} questions={panelQuestions} />
 
-      <div className="page-header" style={{ marginBottom: 16 }}>
-        <h1 className="page-title">Preview &amp; Publish</h1>
-      </div>
+      <div className="creation-main">
+        <div className="confirm-eyebrow">Test creation</div>
 
-      {/* Wizard Steps */}
-      <div className="steps-header" style={{ marginBottom: 20 }}>
-        <div className="step-item completed">
-          <div className="step-circle"><CheckCircle size={14} /></div>
-          <span className="step-label">Test Details</span>
-        </div>
-        <div className="step-connector done" />
-        <div className="step-item completed">
-          <div className="step-circle"><CheckCircle size={14} /></div>
-          <span className="step-label">Add Questions</span>
-        </div>
-        <div className="step-connector done" />
-        <div className="step-item active">
-          <div className="step-circle">3</div>
-          <span className="step-label">Preview &amp; Publish</span>
-        </div>
-      </div>
-
-      {/* Two-column layout */}
-      <div className="confirm-layout">
-
-        {/* ── LEFT: Question List ── */}
-        <div className="confirm-sidebar">
-          {/* Test header */}
-          <div style={{ padding: '16px', borderBottom: '1px solid #E2E5EF' }}>
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: '#1A1D23', marginBottom: 6 }}>
-              {test?.testName || 'Test Preview'}
-            </h3>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 16px', fontSize: 12, color: '#6B7280' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <Clock size={12} /> {test?.duration ?? 60} min
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <BookOpen size={12} /> {questions.length} Qs
-              </span>
-              {test?.difficultyLevel && (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <BarChart2 size={12} /> {test.difficultyLevel}
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* Tab label */}
-          <div style={{ borderBottom: '1px solid #E2E5EF' }}>
-            <div className="tabs" style={{ padding: '0 12px', marginBottom: 0 }}>
-              <button className="tab-btn active">
-                {test?.testType === 'mocktest' ? 'Mock Test' : test?.testType === 'faq' ? 'FAQ' : 'Chapter Wise'}
-              </button>
-            </div>
-          </div>
-
-          {/* Questions list */}
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            {questions.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: '#9CA3AF', fontSize: 13 }}>
-                No questions added yet
-              </div>
-            ) : questions.map((q, i) => (
-              <div key={q._id || i} style={{
-                padding: '10px 16px',
-                borderBottom: '1px solid #E2E5EF',
-                background: i === 0 ? '#EEF2FF' : 'white',
-              }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#6B7280', marginBottom: 3 }}>Q{i + 1}</div>
-                <div style={{ fontSize: 13, color: '#1A1D23', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {q.questionText || `Question ${i + 1}`}
-                </div>
-                <div style={{ fontSize: 11, color: '#9CA3AF', marginTop: 2 }}>
-                  Ans: {q.correctOption || '—'}
-                  {q.difficultyLevel && <span style={{ marginLeft: 8 }}>· {q.difficultyLevel}</span>}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Edit back */}
-          <div style={{ padding: 12, borderTop: '1px solid #E2E5EF' }}>
-            <button className="btn btn-secondary w-full" onClick={() => navigate(`/add-questions/${testId}`)}>
-              <Edit3 size={13} /> Edit Questions
-            </button>
-          </div>
+        <div className="confirm-heading">
+          <h1>Test created</h1>
+          <span className="badge badge-easy done-pill">
+            <CheckCircle size={13} /> All {totalQ} Questions done
+          </span>
         </div>
 
-        {/* ── RIGHT: Publish Controls ── */}
-        <div className="confirm-panel">
+        <TestSummaryCard test={test || {}} onEdit={() => setEditOpen(true)} />
 
-          {/* Test Summary */}
-          <div className="test-preview-header">
-            <h3 style={{ fontSize: 14, fontWeight: 600, color: '#1A1D23', marginBottom: 10 }}>Test Summary</h3>
-            <div className="test-preview-meta" style={{ flexWrap: 'wrap', gap: '8px 24px' }}>
-              <div className="test-meta-item">
-                <span>Name:</span>
-                <span className="test-meta-value">{test?.testName || '—'}</span>
-              </div>
-              <div className="test-meta-item">
-                <span>Subject:</span>
-                <span className="test-meta-value">{test?.subject || '—'}</span>
-              </div>
-              <div className="test-meta-item">
-                <span>Duration:</span>
-                <span className="test-meta-value">{test?.duration ?? 60} min</span>
-              </div>
-              <div className="test-meta-item">
-                <span>Questions:</span>
-                <span className="test-meta-value">{questions.length}</span>
-              </div>
-              <div className="test-meta-item">
-                <span>Difficulty:</span>
-                <span className="test-meta-value">{test?.difficultyLevel || '—'}</span>
-              </div>
-              <div className="test-meta-item">
-                <span>Marking:</span>
-                <span className="test-meta-value">
-                  +{test?.correctMarking ?? 4} / {test?.negativeMarking ?? -1}
-                </span>
-              </div>
-            </div>
-          </div>
+        {/* Publish tabs */}
+        <div className="tabs tabs-pill confirm-tabs">
+          <button className={`tab-btn${publishMode === 'now' ? ' active' : ''}`} onClick={() => setPublishMode('now')} type="button">Publish Now</button>
+          <button className={`tab-btn${publishMode === 'schedule' ? ' active' : ''}`} onClick={() => setPublishMode('schedule')} type="button">Schedule Publish</button>
+        </div>
 
-          {/* Publish Mode */}
-          <div className="publish-section">
-            <div className="publish-title">Publish Test</div>
-            <div className="publish-actions">
-              <button
-                className="publish-btn"
-                style={publishMode === 'now'
-                  ? { background: '#4F6EF7', color: 'white' }
-                  : { background: '#F3F4F6', color: '#6B7280', border: '1px solid #E2E5EF' }}
-                onClick={() => setPublishMode('now')}
-                type="button"
-              >
-                <Send size={13} style={{ marginRight: 6, display: 'inline', verticalAlign: 'middle' }} />
-                Publish Now
-              </button>
-              <button
-                className="publish-btn"
-                style={publishMode === 'schedule'
-                  ? { background: '#4F6EF7', color: 'white' }
-                  : { background: '#F3F4F6', color: '#6B7280', border: '1px solid #E2E5EF' }}
-                onClick={() => setPublishMode('schedule')}
-                type="button"
-              >
-                <Calendar size={13} style={{ marginRight: 6, display: 'inline', verticalAlign: 'middle' }} />
-                Schedule Publish
-              </button>
-            </div>
+        {publishMode === 'now' ? (
+          <div className="live-until">
+            <h2 className="live-until-title">Live Until</h2>
+            <p className="live-until-sub">Choose how long this test should remain available on the platform.</p>
 
-            {publishMode === 'schedule' && (
-              <div className="form-group" style={{ marginTop: 14 }}>
-                <label className="form-label">Schedule Date &amp; Time</label>
-                <input
-                  type="datetime-local"
-                  className="form-input"
-                  value={scheduleDate}
-                  onChange={e => setScheduleDate(e.target.value)}
-                  min={new Date().toISOString().slice(0, 16)}
-                />
-              </div>
-            )}
-          </div>
-
-          {/* Live Until */}
-          <div className="live-until-section">
-            <div className="live-until-title">Live Until</div>
-            <div className="live-until-sub">How long should this test remain accessible?</div>
-            <div className="duration-options">
-              {DURATION_OPTIONS.map(opt => (
-                <label key={opt.value} className={`duration-option${liveDuration === opt.value ? ' selected' : ''}`}>
-                  <input
-                    type="radio"
-                    name="liveDuration"
-                    value={opt.value}
-                    checked={liveDuration === opt.value}
-                    onChange={() => setLiveDuration(opt.value)}
-                  />
-                  {opt.label}
+            <div className="live-grid">
+              {LIVE_OPTIONS.map(opt => (
+                <label key={opt.value} className={`live-option${liveUntil === opt.value ? ' selected' : ''}`}>
+                  <input type="radio" name="liveUntil" value={opt.value} checked={liveUntil === opt.value} onChange={() => setLiveUntil(opt.value)} />
+                  <span>{opt.label}</span>
                 </label>
               ))}
             </div>
-          </div>
 
-          {/* Question previews (first 3) */}
-          {questions.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#1A1D23', marginBottom: 12 }}>
-                Questions Preview
-              </div>
-              {questions.slice(0, 3).map((q, i) => (
-                <div key={q._id || i} className="q-preview-card">
-                  <div className="q-preview-num">Q{i + 1}</div>
-                  <div className="q-preview-text">{q.questionText || `Question ${i + 1}`}</div>
-                  <div className="q-options-grid">
-                    {(q.options || []).slice(0, 4).map((o: any, j: number) => {
-                      const letter = LETTERS[j];
-                      const isCorrect = q.correctOption === letter;
-                      return (
-                        <div key={j} className={`q-option${isCorrect ? ' correct' : ''}`}>
-                          <div className="q-option-letter">{letter}</div>
-                          <span>{typeof o === 'string' ? o : (o?.text || `Option ${letter}`)}</span>
-                        </div>
-                      );
-                    })}
+            {liveUntil === 'custom' && (
+              <div className="custom-duration">
+                <div className="form-group">
+                  <div className="input-with-icon icon-right">
+                    <input
+                      className="form-input"
+                      type="date"
+                      value={endDate}
+                      onChange={e => setEndDate(e.target.value)}
+                      placeholder="Select End Date"
+                    />
+                    <Calendar size={15} className="input-icon" />
                   </div>
-                  {q.solution && (
-                    <div style={{ marginTop: 8, padding: '6px 10px', background: '#F0FDF4', borderRadius: 4, fontSize: 12, color: '#059669' }}>
-                      💡 {q.solution}
-                    </div>
-                  )}
                 </div>
-              ))}
-              {questions.length > 3 && (
-                <div style={{ textAlign: 'center', fontSize: 12.5, color: '#9CA3AF', padding: '8px 0' }}>
-                  + {questions.length - 3} more question{questions.length - 3 > 1 ? 's' : ''}
+                <div className="form-group">
+                  <select className="form-select" value={endTime} onChange={e => setEndTime(e.target.value)}>
+                    <option value="">Select End Time</option>
+                    {END_TIMES.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* Actions */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 8 }}>
-            <button className="btn btn-secondary" onClick={() => navigate(`/add-questions/${testId}`)} disabled={publishing}>
-              ← Back
-            </button>
-            <button
-              className="btn btn-primary btn-lg"
-              onClick={handlePublish}
-              disabled={publishing || (publishMode === 'schedule' && !scheduleDate)}
-            >
-              {publishing
-                ? 'Publishing…'
-                : publishMode === 'now'
-                  ? '✓ Confirm & Publish'
-                  : '📅 Schedule Publish'}
-            </button>
+              </div>
+            )}
           </div>
+        ) : (
+          <div className="live-until">
+            <h2 className="live-until-title">Schedule Publish</h2>
+            <p className="live-until-sub">Pick when this test should go live.</p>
+            <div className="form-group" style={{ maxWidth: 360 }}>
+              <label className="form-label">Publish Date &amp; Time</label>
+              <input
+                className="form-input"
+                type="datetime-local"
+                value={scheduleAt}
+                onChange={e => setScheduleAt(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="form-actions">
+          <button className="btn btn-secondary" onClick={() => navigate(`/add-questions/${testId}`)} disabled={publishing}>Cancel</button>
+          <button className="btn btn-primary" onClick={handleConfirm} disabled={publishing}>
+            {publishing ? 'Publishing…' : 'Confirm'}
+          </button>
         </div>
       </div>
+
+      {editOpen && testId && (
+        <EditTestModal testId={testId} initial={editInitial} onClose={() => setEditOpen(false)} onSaved={loadTest} />
+      )}
     </div>
   );
 };

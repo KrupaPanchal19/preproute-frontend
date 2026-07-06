@@ -1,11 +1,15 @@
-import React, { createContext, useContext, useState } from 'react';
-import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, FilePlus2, BarChart2, LogOut, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import {
+  LayoutDashboard, FilePlus2, ClipboardList, LogOut, CheckCircle, AlertCircle, Bell, ChevronDown,
+  Users, CalendarDays, BarChart3, MessageSquare, FileText, Award, Bookmark, Settings,
+} from 'lucide-react';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import CreateTest from './pages/CreateTest';
 import AddQuestions from './pages/AddQuestions';
 import PreviewPublish from './pages/PreviewPublish';
+import { Logo } from './components/Logo';
 
 /* ============================================================
    TOAST CONTEXT
@@ -16,7 +20,7 @@ interface ToastContextType {
 }
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
-export const useToast = () => {
+export const useToast = (): ToastContextType => {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error('useToast must be within ToastProvider');
   return ctx;
@@ -60,25 +64,67 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 };
 
 /* ============================================================
-   PREPROUTE LOGO SVG
+   HEADER USER MENU
    ============================================================ */
-const PreprouteLogo: React.FC<{ size?: number }> = ({ size = 22 }) => (
-  <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <rect width="32" height="32" rx="8" fill="#4F6EF7"/>
-    <path d="M8 10h10a4 4 0 0 1 0 8H8V10z" fill="white"/>
-    <path d="M8 22h6" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-  </svg>
-);
+const UserMenu: React.FC<{ displayName: string; initials: string; onLogout: () => void }> = ({ displayName, initials, onLogout }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className="user-menu" ref={ref}>
+      <button className="user-menu-trigger" onClick={() => setOpen(o => !o)} aria-haspopup="menu" aria-expanded={open}>
+        <div className="user-avatar">{initials}</div>
+        <div className="user-meta">
+          <div className="user-name">{displayName}</div>
+          <div className="user-role">Admin</div>
+        </div>
+        <ChevronDown size={15} className="user-chevron" />
+      </button>
+      {open && (
+        <div className="user-dropdown" role="menu">
+          <button className="user-dropdown-item" role="menuitem" onClick={onLogout}>
+            <LogOut size={15} /> Logout
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
 
 /* ============================================================
    MAIN LAYOUT (Sidebar + Header + Content)
    ============================================================ */
+const NAV_ITEMS = [
+  { to: '/', end: true, icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/create-test', end: false, icon: FilePlus2, label: 'Test Creation' },
+  { to: '/test-tracking', end: false, icon: ClipboardList, label: 'Test Tracking' },
+];
+
+// Decorative section icons shown only in the collapsed rail (question flow).
+const RAIL_ICONS = [Users, CalendarDays, BarChart3, MessageSquare, FileText, Award, Bookmark, Settings];
+
 const MainLayout: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const userString = localStorage.getItem('user');
-  const user = userString ? JSON.parse(userString) : { userId: 'Admin', name: 'Admin' };
-  const displayName = user.name || user.userId || 'Admin';
+  const user = userString ? JSON.parse(userString) : { userId: 'Alex Wando', name: 'Alex Wando' };
+  const displayName = user.name || user.userId || 'Alex Wando';
   const initials = displayName.substring(0, 2).toUpperCase();
+
+  // The question-creation flow uses the collapsed icon rail (per Figma).
+  const collapsed = /^\/(add-questions|preview-test)\//.test(location.pathname);
+
+  const creationActive = ['/create-test', '/edit-test', '/add-questions', '/preview-test']
+    .some(p => location.pathname.startsWith(p));
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -89,76 +135,58 @@ const MainLayout: React.FC = () => {
   return (
     <div className="app-container">
       {/* Sidebar */}
-      <aside className="sidebar">
-        {/* Logo */}
+      <aside className={`sidebar${collapsed ? ' collapsed' : ''}`}>
         <div className="sidebar-logo">
-          <PreprouteLogo size={26} />
-          <span className="sidebar-logo-text">Preptoute</span>
+          <Logo height={26} />
         </div>
 
-        {/* Nav */}
         <nav className="sidebar-nav">
-          <NavLink to="/" end className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
-            <LayoutDashboard size={17} />
-            <span>Dashboard</span>
-          </NavLink>
-          <NavLink to="/create-test" className={({ isActive }) => `sidebar-link${isActive || window.location.pathname.startsWith('/edit-test') || window.location.pathname.startsWith('/add-questions') || window.location.pathname.startsWith('/preview-test') ? ' active' : ''}`}>
-            <FilePlus2 size={17} />
-            <span>Test Creation</span>
-          </NavLink>
-          <NavLink to="/test-tracking" className={({ isActive }) => `sidebar-link${isActive ? ' active' : ''}`}>
-            <BarChart2 size={17} />
-            <span>Test Tracking</span>
-          </NavLink>
-        </nav>
+          {NAV_ITEMS.map(({ to, end, icon: Icon, label }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              title={label}
+              className={({ isActive }) => {
+                const active = to === '/create-test' ? creationActive : isActive;
+                return `sidebar-link${active ? ' active' : ''}`;
+              }}
+            >
+              <Icon size={18} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
 
-        {/* Footer / User */}
-        <div className="sidebar-footer">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '0 4px' }}>
-            <div className="user-avatar" style={{ background: 'linear-gradient(135deg, #FF6B6B, #FF8E53)' }}>
-              {initials}
+          {collapsed && (
+            <div className="sidebar-rail-extra" aria-hidden="true">
+              {RAIL_ICONS.map((Icon, i) => (
+                <span key={i} className="sidebar-rail-icon"><Icon size={18} /></span>
+              ))}
             </div>
-            <div>
-              <div className="user-name" style={{ fontSize: 13, fontWeight: 600 }}>{displayName}</div>
-              <div className="user-role">Admin</div>
-            </div>
-          </div>
-          <button onClick={handleLogout} className="sidebar-link w-full" style={{ border: 'none', background: 'transparent', textAlign: 'left', cursor: 'pointer' }}>
-            <LogOut size={17} />
-            <span>Logout</span>
-          </button>
-        </div>
+          )}
+        </nav>
       </aside>
 
       {/* Main */}
       <div className="main-content">
-        {/* Topbar */}
         <header className="header">
-          <div className="header-title">
-            {/* breadcrumbs rendered per-page */}
-          </div>
+          <div className="header-title" />
           <div className="header-user">
-            <button style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#9CA3AF', display: 'flex', alignItems: 'center' }}>
-              <RefreshCw size={16} />
+            <button className="header-bell" aria-label="Notifications">
+              <Bell size={18} />
+              <span className="header-bell-dot" />
             </button>
-            <div className="user-avatar" style={{ background: 'linear-gradient(135deg, #FF6B6B, #FF8E53)' }}>
-              {initials}
-            </div>
-            <div>
-              <div className="user-name">{displayName}</div>
-              <div className="user-role">Admin</div>
-            </div>
+            <UserMenu displayName={displayName} initials={initials} onLogout={handleLogout} />
           </div>
         </header>
 
-        {/* Routes */}
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/create-test" element={<CreateTest />} />
           <Route path="/edit-test/:id" element={<CreateTest />} />
           <Route path="/add-questions/:id" element={<AddQuestions />} />
           <Route path="/preview-test/:id" element={<PreviewPublish />} />
-          <Route path="/test-tracking" element={<div className="page-container"><div className="card" style={{ padding: 40, textAlign: 'center', color: '#9CA3AF' }}>Test Tracking coming soon</div></div>} />
+          <Route path="/test-tracking" element={<div className="page-container"><div className="card empty-soon">Test Tracking coming soon</div></div>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
